@@ -957,6 +957,12 @@ createFile('.htaccess', $htaccessContent);
 createFile("composer.json", $composerJsonContent);
 
 if (file_exists('composer.json')) {
+  if (empty(shell_exec('composer'))) {
+    displayError("Composer n'est pas installé sur votre machine, \nveuillez l'installer en suivant les instructions sur https://getcomposer.org/download/");
+    displayMissingDependenciesMessage();
+    die();
+  }
+
   exec('composer install');
   displaySuccessMessage($rootDirectoryName);
   die();
