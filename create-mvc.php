@@ -1,3 +1,4 @@
+#! /usr/bin/php
 <?php
 
 function displaySuccessMessage(string $dirName) {
@@ -137,90 +138,98 @@ $routerContent = <<< 'EOL'
 
 namespace App;
 
-use AltoRouter;
 use App\Controller\ErrorController;
 
-class Router extends AltoRouter {
+class Router extends \AltoRouter{
+
   /**
-   * Crée une instance du router pour naviguer sur le site
+   *
+   * Ajoute une route à faire correspondre en méthode GET
+   *
+   * @param string $route la route à faire correspondre (peut prendre la forme d'une regex). On peut utiliser des filtres comme [i:id] cf. doc AltoRouter
+   * @param mixed $target la chose à faire lorsqu'une route trouve une correspondance
+   * @param string $name le nom à donner à la route
    *
    */
-  public function __construct() {}
-
-/**
- * Ajoute une route à faire correspondre en méthode GET
- *
- * @param string $route la route à faire correspondre (peut prendre la forme d'une regex). On peut utiliser des filtres comme [i:id]
- * @param mixed $target La chose à faire lorsqu'une route trouve une correspondance, ici on attend ce genre de format -> Controller#method
- */
-  public function get(string $route, string $target): self {
-    $this->map("GET", $route, $target);
-    // on ajoute aussi la version avec le trailing slash
-    $this->map("GET", $route . '/', $target);
-
+  public function get($route, $target, $name = null) {
+    $this->map('GET', $route, $target, $name);
+    $this->map('GET', $route . '/', $target, $name);
     return $this;
   }
 
   /**
+   *
    * Ajoute une route à faire correspondre en méthode POST
    *
-   * @param string $route la route à faire correspondre (peut prendre la forme d'une regex). On peut utiliser des filtres comme [i:id]
-   * @param mixed $target La chose à faire lorsqu'une route trouve une correspondance, ici on attend ce genre de format -> Controller#method
+   * @param string $route la route à faire correspondre (peut prendre la forme d'une regex). On peut utiliser des filtres comme [i:id] cf. doc AltoRouter
+   * @param mixed $target la chose à faire lorsqu'une route trouve une correspondance
+   * @param string $name le nom à donner à la route
+   *
    */
-  public function post(string $route, string $target): self {
-    $this->map("POST", $route, $target);
-    // on ajoute aussi la version avec le trailing slash
-    $this->map("POST", $route . '/', $target);
-
+  public function post($route, $target, $name = null) {
+    $this->map('POST', $route, $target, $name);
+    $this->map('POST', $route . '/', $target, $name);
     return $this;
   }
 
   /**
    *
-   * Démarre le router pour vérifier les correspondances de routes.
-   * Elle va instancier un nouveau controller en rapport avec ce qui
-   * est passé dans le paramètre $target lors de l'ajout d'une route et executer l'action associée
-   * en passant les paramètres présents dans l'url
+   * Ajoute une route à faire correspondre en méthode DELETE
+   *
+   * @param string $route la route à faire correspondre (peut prendre la forme d'une regex). On peut utiliser des filtres comme [i:id] cf. doc AltoRouter
+   * @param mixed $target la chose à faire lorsqu'une route trouve une correspondance
+   * @param string $name le nom à donner à la route
    *
    */
+  public function delete($route, $target, $name = null) {
+    $this->map('DELETE', $route, $target, $name);
+    $this->map('DELETE', $route . '/', $target, $name);
+    return $this;
+  }
+
   public function start() {
-    // recupere les correspondances de route <-> requete
     $match = $this->match();
 
     if (is_array($match)) {
-      // dans la variable match qui est un tableau on à 3clés posibles: target, params, name
+      $this->protectAdminRoutes();
+
       $target = $match['target'];
       $params = $match['params'];
 
-      // $result = explode('#', $target);
-      // $controller = $result[0];
-      // $action = $result[1];
-      // cette syntaxe est equivalente à ce qui se trouve en dessous
-      [$controller, $action] = explode('#', $target);
+      [$controller, $method] = explode('#', $target);
 
       $controller = "App\Controller\\$controller";
-      // $obj = new App\Controller\MainController();
-
       $obj = new $controller();
 
-      if (is_callable([$obj, $action])) {
-
+      if (is_callable([$obj, $method])) {
         if (!empty($params)) {
-          // on execute la combinaison de l'objet et de l'action (execute la méthode de l'objet) avec tous les paramètres reçus
-          array_walk($params, [$obj, $action]);
+
+          $obj->$method(...array_values($params));
           return;
         }
 
-        // $obj->getHome();
-        $obj->$action();
+        $obj->$method();
+        return;
       }
-
-      return;
     }
 
-    // si aucune route n'a trouvé de correspondance
-    $errorController = new ErrorController();
-    $errorController->get404();
+    $errorContoller = new ErrorController();
+    $errorContoller->get404();
+  }
+
+  private function getActiveURL() {
+    return $_SERVER['REQUEST_URI'];
+  }
+
+  private function protectAdminRoutes() {
+    $url = $this->getActiveURL();
+
+    $user = $_SESSION['user'] ?? null;
+    $user = unserialize($user) ?? null;
+
+    if (str_contains($url, 'admin') && (!$user || $user->getUserType() !== "admin")) {
+      header('Location: /');
+    }
   }
 }
 EOL;
@@ -276,57 +285,61 @@ class Form {
    *
    * Cette méthode permet d'envoyer un fichier au serveur et de le stocker
    *
+   * @param string $name Nom à aller chercher dans le tableau $_FILES
    * @param string $uploadDir Le chemin vers le fichier à partir de la racine du projet
    * @param array &$errors Le tableau d'erreur à modifier en cas d'erreur fichier
    * @param array $options Un tableau d'options avec la clé allowedExtensions contenant un tableau correspondant aux fichiers acceptés
    *
-   * @return string Le chemin d'ajout du fichier à stocker en base de donnée
+   * @return array Le(s) chemin(s) d'ajout du/des fichier(s) à stocker en base de donnée
    *
    */
-  public static function uploadFile(string $uploadDir, array &$errors = [], array $options = []) {
-    $image = $_FILES['image'] ?? null;
-    $allowedExtensions = $options['allowedExtensions'] ?? null;
+  public static function uploadFile(string $name, string $uploadDir, array &$errors = [], array $options = []) {
+    $allowedTypes = $options['allowedTypes'] ?? null;
+    $absolutePath = dirname(__DIR__) . $uploadDir . '/';
 
-    if ($image && $image['error'] === UPLOAD_ERR_OK) {
-      // $pathinfo = pathinfo($image['name']);
-      // $extension = $pathinfo['extension'];
-      // $filename = $pathinfo['filename'];
-      // équivalent à
-      // pathinfo renvoie des infos sur un chemin
-      ['extension' => $extension, 'filename' => $filename] = pathinfo($image['name']);
+    if (!is_dir($absolutePath)) {
+      mkdir($absolutePath, 0755, true);
+    }
 
-      if ($allowedExtensions && !in_array($extension, $allowedExtensions)) {
-        $errors['fileExtension'] = "Type de fichier non accepté.";
-      }
+    $images = $_FILES[$name] ?? null;
 
-      if (empty($errors) && $filename) {
-        // on change le nom du fichier par un uuid
-        $filename = Uuid::uuid4();
-        // on ajoute l'extension à ce uuid généré
-        $filename = "$filename.$extension";
-        $absoluteDirPath = dirname(__DIR__) . $uploadDir;
+    $imagePaths = null;
 
-        // si le dossier de destination n'existe pas, on le crée
-        if (!is_dir($absoluteDirPath)) {
-          mkdir($absoluteDirPath, 0777, true);
-        }
+    if ($images) {
+      for ($i = 0; $i < sizeof($images); $i++) {
+        if ($images['error'][$i] === UPLOAD_ERR_OK) {
+          ['extension' => $extension, 'filename' => $filename] = pathinfo($images['name'][$i]);
 
-        // on ajoute le nom du fichier au chemin de du dossier de destination
-        $uploadfile = "$uploadDir/$filename";
+          if ($allowedTypes && !in_array($extension, $allowedTypes)) {
+            $errors['fileError'] = "Type de fichier non accepté.";
+          }
 
-        // la clé tmp_name de notre image correspond au dossier de téléchargement temporaire de l'image
-        // ici on vient déplacer l'image à l'endoit qu'on a défini
-        // move_uploaded_file renvoie un booléen en fonction de l'issu du déplacement
-        // ici on vient donc rajouter un message d'erreur si le déplacement n'a pas été effectué
-        if (!move_uploaded_file($image['tmp_name'], dirname(__DIR__) . $uploadfile)) {
-          $errors['fileError'] = "Problème lors de l'envoi du fichier.";
+          if (empty($errors) && $filename) {
+            $filename = hash('sha256', Uuid::uuid4() . $filename);
+            $filename .= ".$extension";
+
+            $uploadFile = $uploadDir . '/' . $filename;
+
+            if (!move_uploaded_file($images['tmp_name'][$i], dirname(__DIR__) . $uploadFile)) {
+              $errors['fileError'] = "Problème durant l'ajout du fichier.";
+              continue;
+            }
+
+            if (!$imagePaths) {
+              $imagePaths = [];
+            }
+
+            array_push($imagePaths, $uploadFile);
+
+          }
+
         }
       }
     }
 
-    // on retourne soit le chemin du fichier téléchargé ou null
-    return $uploadfile ?? null;
+    return $imagePaths;
   }
+}
 }
 EOL;
 
@@ -491,7 +504,7 @@ $homeTwig = <<< 'EOL'
 {% block head %}{% endblock %}
 
 {% block main %}
-	<h1>Bienvenue dans vore nouveau projet MVC</h1>
+	<h1>Bienvenue dans votre nouveau projet MVC</h1>
 {% endblock %}
 EOL;
 
@@ -502,10 +515,11 @@ $mainLayoutTwigContent = <<< 'EOL'
 		<meta charset="UTF-8">
 		<meta http-equiv="X-UA-Compatible" content="IE=edge">
 		<meta name="viewport" content="width=device-width, initial-scale=1.0">
-		<title>{{title ?? "Titre par défaut"}}</title>
 		<link rel="stylesheet" href="/public/assets/scss/main.css">
 		<script src="/public/assets/js/main.js" defer></script>
-		{% block head %}{% endblock %}
+		{% block head %}
+		  <title>Projet MVC</title>
+    {% endblock %}
 	</head>
 	<body>
 		<div class="backdrop"></div>
@@ -696,7 +710,7 @@ $screen-xxl-min: 1800px;
 
 // Custom devices
 @mixin rwd($screen) {
-  @media (min-width: $screen+'px') {
+  @media (min-width: #{$screen}px) {
     @content;
   }
 }
@@ -903,6 +917,17 @@ $composerJsonContent = <<< "EOL"
 }
 EOL;
 
+$envContent = <<< 'EOL'
+# le dsn de connexion sous la forme
+# mysql:host=...;dbname=...;
+DB_DSN=
+
+# utilisateur servant à la connexion bdd
+DB_USER=
+# mot de pass de l'utilisateur
+DB_PASS=
+EOL;
+
 mkdir('public/assets/scss/includes', 0777, true);
 mkdir('public/assets/js');
 mkdir('views/layouts', 0777, true);
@@ -925,8 +950,8 @@ createFile('public/assets/scss/includes/_reset.scss', $resetScssContent);
 createFile('public/assets/scss/includes/_variables.scss', $variablesScssContent);
 createFile('public/assets/scss/main.css.map', $mainCssMapContent);
 createFile('public/assets/scss/main.css', $mainCssContent);
-createFile('.env', '');
-createFile('.env.example', '');
+createFile('.env', $envContent);
+createFile('.env.example', $envContent);
 createFile('.gitignore', $gitIgnoreContent);
 createFile('.htaccess', $htaccessContent);
 createFile("composer.json", $composerJsonContent);
